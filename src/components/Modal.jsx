@@ -1,7 +1,9 @@
 import { X } from 'lucide-react';
 import { useEffect } from 'react';
 
-export default function Modal({ title, children, onClose }) {
+const SIZE = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
+
+export default function Modal({ title, children, onClose, size = 'md' }) {
   useEffect(() => {
     const handleKey = (e) => {
       if (e.key === 'Escape') onClose();
@@ -16,7 +18,7 @@ export default function Modal({ title, children, onClose }) {
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+      <div className={`relative bg-white rounded-xl shadow-2xl w-full ${SIZE[size] ?? SIZE.md} max-h-[90vh] overflow-y-auto`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
           <h3 className="font-semibold text-slate-900 text-base">{title}</h3>
           <button
