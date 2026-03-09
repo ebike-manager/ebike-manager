@@ -6,6 +6,7 @@ const KEY_USUARIOS = 'ebike_usuarios';
 const empresaDefault = {
   nombre: 'E-Bike Manager',
   slogan:  'Movilidad eléctrica inteligente',
+  moneda:  'USD',
 };
 
 const usuariosDefault = [

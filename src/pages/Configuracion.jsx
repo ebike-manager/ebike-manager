@@ -176,6 +176,20 @@ export default function Configuracion() {
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               placeholder="Movilidad eléctrica inteligente" />
           </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Moneda del sistema</label>
+            <select
+              value={empresaForm.moneda ?? 'USD'}
+              onChange={(e) => setEmpresaForm((f) => ({ ...f, moneda: e.target.value }))}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+            >
+              <option value="USD">Dólar estadounidense (US$)</option>
+              <option value="UYU">Peso uruguayo ($U)</option>
+            </select>
+            <p className="text-xs text-slate-400 mt-1">
+              Se usa para mostrar precios en Inventario, Ventas y Reportes.
+            </p>
+          </div>
           <div className="flex items-center gap-3 pt-1">
             <button type="submit"
               className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors">

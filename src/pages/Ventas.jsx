@@ -1,13 +1,15 @@
 import { useState, useMemo } from 'react';
 import {
   Plus, Search, Trash2, ShoppingCart,
-  DollarSign, TrendingUp, CalendarDays, X,
+  DollarSign, TrendingUp, X,
   AlertTriangle, Eye, Package,
 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { useVentas }     from '../hooks/useVentas';
 import { useInventario } from '../hooks/useInventario';
 import { useClientes }   from '../hooks/useClientes';
+import { useConfig }     from '../hooks/useConfig';
+import { MONEDAS, formatMoney } from '../utils/moneda';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const formatFecha = (str) => {
@@ -16,8 +18,6 @@ const formatFecha = (str) => {
     day: 'numeric', month: 'short', year: 'numeric',
   });
 };
-const formatMoney = (n) =>
-  '$' + (n ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const getTodayStr = () => new Date().toISOString().split('T')[0];
 const estesMes = (fecha) => {
   const d = new Date(fecha + 'T00:00:00'), hoy = new Date();
@@ -37,7 +37,7 @@ const newItem = () => ({
   cantidad: 1, precioUnitario: '', subtotal: 0,
 });
 
-function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
+function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
   const [form, setForm] = useState({
     clienteId: '', fecha: getTodayStr(),
     items: [newItem()], estado: 'completada', notas: '',
@@ -74,7 +74,7 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
     updateItem(idx, { precioUnitario: raw, subtotal: cantidad * precio });
   };
 
-  const addItem   = () => setForm((f) => ({ ...f, items: [...f.items, newItem()] }));
+  const addItem    = () => setForm((f) => ({ ...f, items: [...f.items, newItem()] }));
   const removeItem = (idx) => setForm((f) => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
 
   const total = form.items.reduce((s, it) => s + (it.subtotal || 0), 0);
@@ -94,9 +94,9 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
     const cliente = clientes.find((c) => c.id === form.clienteId);
     const cleanItems = form.items.map(({ _key, ...rest }) => ({
       ...rest,
-      cantidad: parseInt(rest.cantidad, 10),
+      cantidad:       parseInt(rest.cantidad, 10),
       precioUnitario: parseFloat(rest.precioUnitario) || 0,
-      subtotal: rest.subtotal,
+      subtotal:       rest.subtotal,
     }));
     onGuardar({
       clienteId:     form.clienteId,
@@ -113,6 +113,8 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
     `w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
       err ? 'border-red-400 bg-red-50' : 'border-slate-300'
     }`;
+
+  const simbolo = MONEDAS[moneda]?.simbolo ?? 'US$';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
@@ -153,10 +155,10 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
         </div>
 
         {/* Items header */}
-        <div className="grid grid-cols-[1fr_64px_104px_88px_28px] gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider px-1 mb-1">
+        <div className="grid grid-cols-[1fr_64px_112px_88px_28px] gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider px-1 mb-1">
           <span>Producto</span>
           <span className="text-center">Cant.</span>
-          <span className="text-right">Precio unit.</span>
+          <span className="text-right">P. unit. ({simbolo})</span>
           <span className="text-right">Subtotal</span>
           <span />
         </div>
@@ -164,7 +166,7 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
         <div className="space-y-2">
           {form.items.map((item, i) => (
             <div key={item._key}
-              className="grid grid-cols-[1fr_64px_104px_88px_28px] gap-2 items-center p-2 bg-slate-50 rounded-lg border border-slate-100">
+              className="grid grid-cols-[1fr_64px_112px_88px_28px] gap-2 items-center p-2 bg-slate-50 rounded-lg border border-slate-100">
               <select value={item.productoId}
                 onChange={(e) => handleProductoChange(i, e.target.value)}
                 className="w-full border border-slate-300 bg-white rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
@@ -181,7 +183,7 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
                 className="w-full border border-slate-300 bg-white rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 placeholder="0.00" />
               <span className="text-sm font-bold text-slate-800 text-right pr-1">
-                {formatMoney(item.subtotal)}
+                {formatMoney(item.subtotal, moneda)}
               </span>
               <button type="button" onClick={() => removeItem(i)}
                 disabled={form.items.length === 1}
@@ -217,7 +219,7 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
       {/* Total */}
       <div className="flex items-center justify-between pt-3 border-t border-slate-200">
         <span className="text-sm text-slate-500 font-medium">Total de la venta</span>
-        <span className="text-2xl font-bold text-slate-900">{formatMoney(total)}</span>
+        <span className="text-2xl font-bold text-slate-900">{formatMoney(total, moneda)}</span>
       </div>
 
       {/* Acciones */}
@@ -236,7 +238,7 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
 }
 
 // ── Detalle de venta (modal) ──────────────────────────────────────────────────
-function VentaDetalle({ venta, onClose, onEliminar }) {
+function VentaDetalle({ venta, moneda, onClose, onEliminar }) {
   const cfg = ESTADO_CFG[venta.estado] ?? ESTADO_CFG.completada;
   return (
     <div className="space-y-4">
@@ -273,8 +275,8 @@ function VentaDetalle({ venta, onClose, onEliminar }) {
                 <tr key={i}>
                   <td className="px-3 py-2 text-slate-800">{it.productoNombre}</td>
                   <td className="px-3 py-2 text-center text-slate-600">{it.cantidad}</td>
-                  <td className="px-3 py-2 text-right text-slate-600">{formatMoney(it.precioUnitario)}</td>
-                  <td className="px-3 py-2 text-right font-semibold text-slate-800">{formatMoney(it.subtotal)}</td>
+                  <td className="px-3 py-2 text-right text-slate-600">{formatMoney(it.precioUnitario, moneda)}</td>
+                  <td className="px-3 py-2 text-right font-semibold text-slate-800">{formatMoney(it.subtotal, moneda)}</td>
                 </tr>
               ))}
             </tbody>
@@ -292,7 +294,7 @@ function VentaDetalle({ venta, onClose, onEliminar }) {
       {/* Total */}
       <div className="flex items-center justify-between pt-2 border-t border-slate-200">
         <span className="font-medium text-slate-600">Total</span>
-        <span className="text-xl font-bold text-slate-900">{formatMoney(venta.total)}</span>
+        <span className="text-xl font-bold text-slate-900">{formatMoney(venta.total, moneda)}</span>
       </div>
 
       {/* Actions */}
@@ -311,7 +313,7 @@ function VentaDetalle({ venta, onClose, onEliminar }) {
 }
 
 // ── Fila de tabla ────────────────────────────────────────────────────────────
-function VentaRow({ venta, onVer }) {
+function VentaRow({ venta, moneda, onVer }) {
   const cfg = ESTADO_CFG[venta.estado] ?? ESTADO_CFG.completada;
   const resumen = venta.items.length === 1
     ? venta.items[0].productoNombre
@@ -334,7 +336,7 @@ function VentaRow({ venta, onVer }) {
         )}
       </td>
       <td className="px-4 py-3.5 text-right">
-        <span className="text-sm font-bold text-slate-900">{formatMoney(venta.total)}</span>
+        <span className="text-sm font-bold text-slate-900">{formatMoney(venta.total, moneda)}</span>
       </td>
       <td className="px-4 py-3.5 text-center">
         <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${cfg.cls}`}>
@@ -375,15 +377,17 @@ const HEADERS = [
 ];
 
 const FILTROS = [
-  { value: 'todas',      label: 'Todas'      },
-  { value: 'este-mes',   label: 'Este mes'   },
-  { value: 'este-anio',  label: 'Este año'   },
+  { value: 'todas',     label: 'Todas'    },
+  { value: 'este-mes',  label: 'Este mes' },
+  { value: 'este-anio', label: 'Este año' },
 ];
 
 export default function Ventas() {
   const { ventas, agregarVenta, eliminarVenta } = useVentas();
   const { productos, editarProducto }           = useInventario();
   const { clientes }                            = useClientes();
+  const { empresa }                             = useConfig();
+  const moneda = empresa.moneda ?? 'USD';
 
   const [search, setSearch]         = useState('');
   const [filtro, setFiltro]         = useState('todas');
@@ -404,16 +408,15 @@ export default function Ventas() {
   }, [ventas, filtro, search]);
 
   const stats = useMemo(() => {
-    const ventasMes = ventas.filter((v) => estesMes(v.fecha));
-    const ingresosMes = ventasMes.reduce((s, v) => s + v.total, 0);
+    const ventasMes     = ventas.filter((v) => estesMes(v.fecha));
+    const ingresosMes   = ventasMes.reduce((s, v) => s + v.total, 0);
     const ingresosTotal = ventas.reduce((s, v) => s + v.total, 0);
-    const ticket = ventas.length ? ingresosTotal / ventas.length : 0;
+    const ticket        = ventas.length ? ingresosTotal / ventas.length : 0;
     return { ingresosTotal, ingresosMes, ventasMes: ventasMes.length, ticket };
   }, [ventas]);
 
   const handleRegistrar = (datos) => {
     agregarVenta(datos);
-    // Descontar stock del inventario
     datos.items.forEach((item) => {
       if (!item.productoId) return;
       const prod = productos.find((p) => p.id === item.productoId);
@@ -430,10 +433,10 @@ export default function Ventas() {
     <div className="space-y-5">
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={DollarSign}  label="Ingresos totales"   value={formatMoney(stats.ingresosTotal)} color="emerald" />
-        <StatCard icon={TrendingUp}  label="Ingresos este mes"  value={formatMoney(stats.ingresosMes)}   color="blue"    />
-        <StatCard icon={ShoppingCart} label="Ventas este mes"   value={stats.ventasMes}                  color="violet"  />
-        <StatCard icon={Package}     label="Ticket promedio"    value={formatMoney(stats.ticket)}        color="amber"   />
+        <StatCard icon={DollarSign}   label="Ingresos totales"  value={formatMoney(stats.ingresosTotal, moneda)} color="emerald" />
+        <StatCard icon={TrendingUp}   label="Ingresos este mes" value={formatMoney(stats.ingresosMes, moneda)}   color="blue"    />
+        <StatCard icon={ShoppingCart} label="Ventas este mes"   value={stats.ventasMes}                          color="violet"  />
+        <StatCard icon={Package}      label="Ticket promedio"   value={formatMoney(stats.ticket, moneda)}        color="amber"   />
       </div>
 
       {/* Tabla */}
@@ -475,7 +478,7 @@ export default function Ventas() {
                 </td></tr>
               ) : (
                 filtradas.map((v) => (
-                  <VentaRow key={v.id} venta={v} onVer={() => setDetalle(v)} />
+                  <VentaRow key={v.id} venta={v} moneda={moneda} onVer={() => setDetalle(v)} />
                 ))
               )}
             </tbody>
@@ -492,7 +495,7 @@ export default function Ventas() {
       {showNew && (
         <Modal title="Registrar nueva venta" onClose={() => setShowNew(false)} size="lg">
           <VentaForm
-            clientes={clientes} productos={productos}
+            clientes={clientes} productos={productos} moneda={moneda}
             onGuardar={handleRegistrar} onCancelar={() => setShowNew(false)}
           />
         </Modal>
@@ -503,6 +506,7 @@ export default function Ventas() {
         <Modal title="Detalle de venta" onClose={() => setDetalle(null)}>
           <VentaDetalle
             venta={detalle}
+            moneda={moneda}
             onClose={() => setDetalle(null)}
             onEliminar={() => setEliminando(detalle)}
           />

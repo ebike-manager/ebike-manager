@@ -57,7 +57,7 @@ export default function Login({ onLogin }) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                placeholder="admin@ebike.com"
+                placeholder="correo@ejemplo.com"
                 autoFocus
                 required
               />
@@ -93,13 +93,6 @@ export default function Login({ onLogin }) {
               Ingresar
             </button>
 
-            {/* Hint */}
-            <p className="text-xs text-slate-400 text-center pt-1">
-              Credenciales por defecto:{' '}
-              <span className="font-mono text-slate-500">admin@ebike.com</span>
-              {' / '}
-              <span className="font-mono text-slate-500">admin123</span>
-            </p>
           </form>
         </div>
 

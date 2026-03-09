@@ -5,25 +5,27 @@ import {
 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { useInventario } from '../hooks/useInventario';
+import { useConfig }     from '../hooks/useConfig';
+import { MONEDAS, formatMoney } from '../utils/moneda';
 
 const CATEGORIAS = ['Bicicletas', 'Motores', 'Baterías', 'Accesorios', 'Repuestos', 'Herramientas'];
 
 const CATEGORIA_COLORS = {
-  Bicicletas: 'bg-blue-100 text-blue-700',
-  Motores: 'bg-violet-100 text-violet-700',
-  Baterías: 'bg-amber-100 text-amber-700',
-  Accesorios: 'bg-pink-100 text-pink-700',
-  Repuestos: 'bg-orange-100 text-orange-700',
+  Bicicletas:   'bg-blue-100 text-blue-700',
+  Motores:      'bg-violet-100 text-violet-700',
+  Baterías:     'bg-amber-100 text-amber-700',
+  Accesorios:   'bg-pink-100 text-pink-700',
+  Repuestos:    'bg-orange-100 text-orange-700',
   Herramientas: 'bg-cyan-100 text-cyan-700',
 };
 
 const HEADERS = [
-  { label: 'Producto', align: '' },
+  { label: 'Producto',  align: '' },
   { label: 'Categoría', align: '' },
-  { label: 'Precio', align: 'text-right' },
-  { label: 'Stock', align: 'text-center' },
-  { label: 'Estado', align: 'text-center' },
-  { label: 'Acciones', align: 'text-center' },
+  { label: 'Precio',    align: 'text-right' },
+  { label: 'Stock',     align: 'text-center' },
+  { label: 'Estado',    align: 'text-center' },
+  { label: 'Acciones',  align: 'text-center' },
 ];
 
 const FORM_VACIO = {
@@ -37,12 +39,12 @@ const FORM_VACIO = {
 };
 
 // ── Formulario de producto ───────────────────────────────────────────────────
-function ProductoForm({ inicial = {}, onGuardar, onCancelar }) {
+function ProductoForm({ inicial = {}, moneda = 'USD', onGuardar, onCancelar }) {
   const [form, setForm] = useState({
     ...FORM_VACIO,
     ...inicial,
-    precio: inicial.precio != null ? String(inicial.precio) : '',
-    stock: inicial.stock != null ? String(inicial.stock) : '',
+    precio:       inicial.precio       != null ? String(inicial.precio)       : '',
+    stock:        inicial.stock        != null ? String(inicial.stock)        : '',
     umbralMinimo: inicial.umbralMinimo != null ? String(inicial.umbralMinimo) : '5',
   });
   const [errors, setErrors] = useState({});
@@ -68,8 +70,8 @@ function ProductoForm({ inicial = {}, onGuardar, onCancelar }) {
     if (!validar()) return;
     onGuardar({
       ...form,
-      precio: parseFloat(form.precio),
-      stock: parseInt(form.stock, 10),
+      precio:       parseFloat(form.precio),
+      stock:        parseInt(form.stock, 10),
       umbralMinimo: parseInt(form.umbralMinimo, 10) || 5,
     });
   };
@@ -78,6 +80,8 @@ function ProductoForm({ inicial = {}, onGuardar, onCancelar }) {
     `w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
       errors[field] ? 'border-red-400 bg-red-50' : 'border-slate-300'
     }`;
+
+  const simbolo = MONEDAS[moneda]?.simbolo ?? 'US$';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -130,7 +134,7 @@ function ProductoForm({ inicial = {}, onGuardar, onCancelar }) {
       <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">
-            Precio ($) <span className="text-red-500">*</span>
+            Precio ({simbolo}) <span className="text-red-500">*</span>
           </label>
           <input
             type="number"
@@ -241,7 +245,7 @@ function StockModal({ producto, onGuardar, onCancelar }) {
 }
 
 // ── Fila de tabla ────────────────────────────────────────────────────────────
-function ProductoRow({ producto, onEdit, onDelete, onEditStock }) {
+function ProductoRow({ producto, moneda, onEdit, onDelete, onEditStock }) {
   const stockBajo = producto.stock <= producto.umbralMinimo;
 
   return (
@@ -265,7 +269,7 @@ function ProductoRow({ producto, onEdit, onDelete, onEditStock }) {
       </td>
       <td className="px-4 py-3.5 text-right">
         <span className="text-sm font-bold text-slate-900">
-          ${producto.precio.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {formatMoney(producto.precio, moneda)}
         </span>
       </td>
       <td className="px-4 py-3.5 text-center">
@@ -315,10 +319,10 @@ function ProductoRow({ producto, onEdit, onDelete, onEditStock }) {
 
 // ── Tarjeta de estadística ───────────────────────────────────────────────────
 const STAT_COLORS = {
-  blue: 'bg-blue-50 text-blue-600',
-  red: 'bg-red-50 text-red-600',
+  blue:    'bg-blue-50 text-blue-600',
+  red:     'bg-red-50 text-red-600',
   emerald: 'bg-emerald-50 text-emerald-600',
-  violet: 'bg-violet-50 text-violet-600',
+  violet:  'bg-violet-50 text-violet-600',
 };
 
 function StatCard({ icon: Icon, label, value, color }) {
@@ -338,11 +342,14 @@ function StatCard({ icon: Icon, label, value, color }) {
 // ── Página principal de Inventario ───────────────────────────────────────────
 export default function Inventario() {
   const { productos, agregarProducto, editarProducto, eliminarProducto } = useInventario();
-  const [search, setSearch] = useState('');
+  const { empresa }  = useConfig();
+  const moneda       = empresa.moneda ?? 'USD';
+
+  const [search, setSearch]             = useState('');
   const [categoriaFiltro, setCategoriaFiltro] = useState('todas');
-  const [showAdd, setShowAdd] = useState(false);
-  const [editando, setEditando] = useState(null);
-  const [eliminando, setEliminando] = useState(null);
+  const [showAdd, setShowAdd]           = useState(false);
+  const [editando, setEditando]         = useState(null);
+  const [eliminando, setEliminando]     = useState(null);
   const [editandoStock, setEditandoStock] = useState(null);
 
   const filtrados = useMemo(() => {
@@ -369,15 +376,15 @@ export default function Inventario() {
     <div className="space-y-5">
       {/* Estadísticas */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Package} label="Total productos" value={stats.total} color="blue" />
-        <StatCard icon={AlertTriangle} label="Stock bajo" value={stats.stockBajo} color="red" />
+        <StatCard icon={Package}       label="Total productos"      value={stats.total}                           color="blue"    />
+        <StatCard icon={AlertTriangle} label="Stock bajo"           value={stats.stockBajo}                       color="red"     />
         <StatCard
           icon={DollarSign}
           label="Valor del inventario"
-          value={`$${stats.valorTotal.toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+          value={formatMoney(stats.valorTotal, moneda)}
           color="emerald"
         />
-        <StatCard icon={LayoutGrid} label="Categorías" value={stats.categorias} color="violet" />
+        <StatCard icon={LayoutGrid}    label="Categorías"           value={stats.categorias}                      color="violet"  />
       </div>
 
       {/* Tabla */}
@@ -442,6 +449,7 @@ export default function Inventario() {
                   <ProductoRow
                     key={p.id}
                     producto={p}
+                    moneda={moneda}
                     onEdit={() => setEditando(p)}
                     onDelete={() => setEliminando(p)}
                     onEditStock={() => setEditandoStock(p)}
@@ -464,6 +472,7 @@ export default function Inventario() {
       {showAdd && (
         <Modal title="Agregar producto" onClose={() => setShowAdd(false)}>
           <ProductoForm
+            moneda={moneda}
             onGuardar={(datos) => { agregarProducto(datos); setShowAdd(false); }}
             onCancelar={() => setShowAdd(false)}
           />
@@ -475,6 +484,7 @@ export default function Inventario() {
         <Modal title="Editar producto" onClose={() => setEditando(null)}>
           <ProductoForm
             inicial={editando}
+            moneda={moneda}
             onGuardar={(datos) => { editarProducto(editando.id, datos); setEditando(null); }}
             onCancelar={() => setEditando(null)}
           />

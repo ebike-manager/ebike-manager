@@ -2,11 +2,10 @@ import { useMemo, useState } from 'react';
 import { TrendingUp, DollarSign, ShoppingCart, Users } from 'lucide-react';
 import { useVentas }   from '../hooks/useVentas';
 import { useClientes } from '../hooks/useClientes';
+import { useConfig }   from '../hooks/useConfig';
+import { formatMoney } from '../utils/moneda';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-const formatMoney = (n) =>
-  '$' + (n ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-
 const estesMes = (fecha) => {
   const d = new Date(fecha + 'T00:00:00'), h = new Date();
   return d.getMonth() === h.getMonth() && d.getFullYear() === h.getFullYear();
@@ -54,7 +53,7 @@ const topClientes = (ventas, n = 5) => {
 };
 
 // ── Gráfico de barras vertical (custom CSS) ──────────────────────────────────
-function GraficoBarras({ datos }) {
+function GraficoBarras({ datos, moneda }) {
   const [hover, setHover] = useState(null);
   const max = Math.max(...datos.map((d) => d.valor), 1);
 
@@ -70,7 +69,7 @@ function GraficoBarras({ datos }) {
               {/* Tooltip */}
               {hover === i && d.valor > 0 && (
                 <div className="absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded-md whitespace-nowrap z-10 shadow-lg pointer-events-none">
-                  <span className="font-semibold">{formatMoney(d.valor)}</span>
+                  <span className="font-semibold">{formatMoney(d.valor, moneda)}</span>
                   <br /><span className="text-slate-400">{d.label}</span>
                 </div>
               )}
@@ -99,7 +98,7 @@ function GraficoBarras({ datos }) {
 }
 
 // ── Barra horizontal para rankings ───────────────────────────────────────────
-function BarraRanking({ label, secondary, valor, max, color = 'bg-emerald-500' }) {
+function BarraRanking({ label, secondary, valor, max, moneda, color = 'bg-emerald-500' }) {
   const pct = max > 0 ? Math.round((valor / max) * 100) : 0;
   return (
     <div className="flex items-center gap-3 py-2 border-b border-slate-50 last:border-0">
@@ -111,7 +110,7 @@ function BarraRanking({ label, secondary, valor, max, color = 'bg-emerald-500' }
         <div className={`${color} h-2 rounded-full transition-all duration-500`} style={{ width: `${pct}%` }} />
       </div>
       <span className="text-sm font-bold text-slate-700 w-16 text-right flex-shrink-0">
-        {typeof valor === 'number' && valor < 1000 ? valor : formatMoney(valor)}
+        {typeof valor === 'number' && valor < 1000 ? valor : formatMoney(valor, moneda)}
       </span>
     </div>
   );
@@ -141,6 +140,8 @@ function StatCard({ icon: Icon, label, value, sub, color }) {
 export default function Reportes() {
   const { ventas }   = useVentas();
   const { clientes } = useClientes();
+  const { empresa }  = useConfig();
+  const moneda = empresa.moneda ?? 'USD';
 
   const stats = useMemo(() => {
     const ingresosTotal = ventas.reduce((s, v) => s + v.total, 0);
@@ -163,10 +164,10 @@ export default function Reportes() {
     <div className="space-y-5">
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={DollarSign}  label="Ingresos totales"  value={formatMoney(stats.ingresosTotal)} color="emerald" />
-        <StatCard icon={TrendingUp}  label="Ingresos este mes" value={formatMoney(stats.ingresosMes)}   color="blue"    sub={`${stats.ventasMes} ${stats.ventasMes === 1 ? 'venta' : 'ventas'}`} />
-        <StatCard icon={ShoppingCart} label="Ticket promedio"  value={formatMoney(stats.ticket)}        color="violet"  sub={`sobre ${ventas.length} ventas`} />
-        <StatCard icon={Users}       label="Clientes activos"  value={stats.totalClientes}              color="amber"   />
+        <StatCard icon={DollarSign}   label="Ingresos totales"  value={formatMoney(stats.ingresosTotal, moneda)} color="emerald" />
+        <StatCard icon={TrendingUp}   label="Ingresos este mes" value={formatMoney(stats.ingresosMes, moneda)}   color="blue"    sub={`${stats.ventasMes} ${stats.ventasMes === 1 ? 'venta' : 'ventas'}`} />
+        <StatCard icon={ShoppingCart} label="Ticket promedio"   value={formatMoney(stats.ticket, moneda)}        color="violet"  sub={`sobre ${ventas.length} ventas`} />
+        <StatCard icon={Users}        label="Clientes activos"  value={stats.totalClientes}                      color="amber"   />
       </div>
 
       {/* Gráfico ventas últimos 14 días */}
@@ -175,7 +176,7 @@ export default function Reportes() {
           <div>
             <h3 className="font-semibold text-slate-900">Ventas — últimos 14 días</h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Total del período: <span className="font-semibold text-slate-600">{formatMoney(totalPeriodo)}</span>
+              Total del período: <span className="font-semibold text-slate-600">{formatMoney(totalPeriodo, moneda)}</span>
             </p>
           </div>
           {totalPeriodo === 0 && (
@@ -184,7 +185,7 @@ export default function Reportes() {
             </span>
           )}
         </div>
-        <GraficoBarras datos={datos14} />
+        <GraficoBarras datos={datos14} moneda={moneda} />
       </div>
 
       {/* Rankings */}
@@ -201,9 +202,10 @@ export default function Reportes() {
                 <BarraRanking
                   key={p.nombre}
                   label={p.nombre}
-                  secondary={`${formatMoney(p.ingresos)} en ingresos`}
+                  secondary={`${formatMoney(p.ingresos, moneda)} en ingresos`}
                   valor={p.cantidad}
                   max={maxProds}
+                  moneda={moneda}
                   color="bg-emerald-500"
                 />
               ))}
@@ -223,9 +225,10 @@ export default function Reportes() {
                 <BarraRanking
                   key={c.nombre}
                   label={c.nombre}
-                  secondary={`${c.compras} ${c.compras === 1 ? 'compra' : 'compras'} · ${formatMoney(c.total)}`}
+                  secondary={`${c.compras} ${c.compras === 1 ? 'compra' : 'compras'} · ${formatMoney(c.total, moneda)}`}
                   valor={c.compras}
                   max={maxClis}
+                  moneda={moneda}
                   color="bg-blue-500"
                 />
               ))}
