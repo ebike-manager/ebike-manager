@@ -2,14 +2,18 @@ import { useState, useMemo } from 'react';
 import {
   Plus, Search, Trash2, ShoppingCart,
   DollarSign, TrendingUp, X,
-  AlertTriangle, Eye, Package,
+  AlertTriangle, Eye, Package, FileText, CreditCard,
 } from 'lucide-react';
 import Modal from '../components/Modal';
-import { useVentas }     from '../hooks/useVentas';
-import { useInventario } from '../hooks/useInventario';
-import { useClientes }   from '../hooks/useClientes';
-import { useConfig }     from '../hooks/useConfig';
-import { MONEDAS, formatMoney } from '../utils/moneda';
+import { useVentas }             from '../hooks/useVentas';
+import { useInventario }         from '../hooks/useInventario';
+import { useClientes }           from '../hooks/useClientes';
+import { useConfig }             from '../hooks/useConfig';
+import { usePagosVenta }         from '../hooks/usePagosVenta';
+import { usePermissions }        from '../hooks/usePermissions';
+import { appendLog }             from '../hooks/useActivityLog';
+import { generarPresupuestoPDF } from '../utils/pdfPresupuesto';
+import { formatMoney }           from '../utils/moneda';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const formatFecha = (str) => {
@@ -24,6 +28,20 @@ const estesMes = (fecha) => {
   return d.getMonth() === hoy.getMonth() && d.getFullYear() === hoy.getFullYear();
 };
 
+// Compute per-currency totals from venta items, or fall back to venta.total
+const getVentaTotalDisplay = (venta, globalMoneda) => {
+  if (!venta.items?.length) return formatMoney(venta.total, globalMoneda);
+  const byMoneda = {};
+  venta.items.forEach((it) => {
+    const m = it.moneda ?? globalMoneda;
+    byMoneda[m] = (byMoneda[m] ?? 0) + (it.subtotal ?? 0);
+  });
+  const keys = Object.keys(byMoneda);
+  if (keys.length === 0) return formatMoney(venta.total, globalMoneda);
+  if (keys.length === 1) return formatMoney(byMoneda[keys[0]], keys[0]);
+  return keys.map((m) => formatMoney(byMoneda[m], m)).join(' + ');
+};
+
 const ESTADO_CFG = {
   completada: { label: 'Completada', cls: 'bg-emerald-100 text-emerald-700' },
   pendiente:  { label: 'Pendiente',  cls: 'bg-amber-100 text-amber-700'    },
@@ -34,13 +52,16 @@ const ESTADO_CFG = {
 let _itemKey = 0;
 const newItem = () => ({
   _key: ++_itemKey, productoId: '', productoNombre: '',
-  cantidad: 1, precioUnitario: '', subtotal: 0,
+  cantidad: 1, precioUnitario: '', subtotal: 0, moneda: 'USD',
 });
 
-function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
+const CUOTAS_OPTS = [3, 6, 12, 18, 24];
+
+function VentaForm({ onGuardar, onCancelar, clientes, productos }) {
   const [form, setForm] = useState({
     clienteId: '', fecha: getTodayStr(),
     items: [newItem()], estado: 'completada', notas: '',
+    tipoPago: 'contado', nCuotas: 12,
   });
   const [errors, setErrors] = useState({});
 
@@ -58,6 +79,7 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
       productoId,
       productoNombre: p?.nombre ?? '',
       precioUnitario,
+      moneda: p?.moneda ?? 'USD',
       subtotal: p ? p.precio * cantidad : 0,
     });
   };
@@ -77,7 +99,20 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
   const addItem    = () => setForm((f) => ({ ...f, items: [...f.items, newItem()] }));
   const removeItem = (idx) => setForm((f) => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
 
-  const total = form.items.reduce((s, it) => s + (it.subtotal || 0), 0);
+  // Per-currency totals
+  const totalPorMoneda = form.items.reduce((acc, it) => {
+    const m = it.moneda ?? 'USD';
+    acc[m] = (acc[m] ?? 0) + (it.subtotal || 0);
+    return acc;
+  }, {});
+  const monedaKeys    = Object.keys(totalPorMoneda);
+  const totalNumerico = Object.values(totalPorMoneda).reduce((s, v) => s + v, 0);
+
+  // Primary moneda and cuota amount
+  const monedaPrimaria = monedaKeys.length === 1 ? monedaKeys[0] : null;
+  const montoPorCuota  = form.tipoPago === 'cuotas' && form.nCuotas > 0
+    ? Math.round((totalNumerico / form.nCuotas) * 100) / 100
+    : 0;
 
   const validar = () => {
     const e = {};
@@ -97,15 +132,19 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
       cantidad:       parseInt(rest.cantidad, 10),
       precioUnitario: parseFloat(rest.precioUnitario) || 0,
       subtotal:       rest.subtotal,
+      moneda:         rest.moneda ?? 'USD',
     }));
     onGuardar({
       clienteId:     form.clienteId,
       clienteNombre: cliente ? `${cliente.nombre} ${cliente.apellido}` : '',
       fecha:         form.fecha,
       items:         cleanItems,
-      total:         parseFloat(total.toFixed(2)),
+      total:         parseFloat(totalNumerico.toFixed(2)),
       estado:        form.estado,
       notas:         form.notas,
+      tipoPago:      form.tipoPago,
+      nCuotas:       form.tipoPago === 'cuotas' ? form.nCuotas : null,
+      monedaCuotas:  monedaPrimaria ?? 'USD',
     });
   };
 
@@ -113,8 +152,6 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
     `w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
       err ? 'border-red-400 bg-red-50' : 'border-slate-300'
     }`;
-
-  const simbolo = MONEDAS[moneda]?.simbolo ?? 'US$';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
@@ -155,10 +192,10 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
         </div>
 
         {/* Items header */}
-        <div className="grid grid-cols-[1fr_64px_112px_88px_28px] gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider px-1 mb-1">
+        <div className="grid grid-cols-[1fr_64px_112px_96px_28px] gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider px-1 mb-1">
           <span>Producto</span>
           <span className="text-center">Cant.</span>
-          <span className="text-right">P. unit. ({simbolo})</span>
+          <span className="text-right">P. unitario</span>
           <span className="text-right">Subtotal</span>
           <span />
         </div>
@@ -166,7 +203,7 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
         <div className="space-y-2">
           {form.items.map((item, i) => (
             <div key={item._key}
-              className="grid grid-cols-[1fr_64px_112px_88px_28px] gap-2 items-center p-2 bg-slate-50 rounded-lg border border-slate-100">
+              className="grid grid-cols-[1fr_64px_112px_96px_28px] gap-2 items-center p-2 bg-slate-50 rounded-lg border border-slate-100">
               <select value={item.productoId}
                 onChange={(e) => handleProductoChange(i, e.target.value)}
                 className="w-full border border-slate-300 bg-white rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
@@ -183,7 +220,7 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
                 className="w-full border border-slate-300 bg-white rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 placeholder="0.00" />
               <span className="text-sm font-bold text-slate-800 text-right pr-1">
-                {formatMoney(item.subtotal, moneda)}
+                {formatMoney(item.subtotal, item.moneda ?? 'USD')}
               </span>
               <button type="button" onClick={() => removeItem(i)}
                 disabled={form.items.length === 1}
@@ -216,10 +253,69 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
         </div>
       </div>
 
+      {/* Tipo de pago */}
+      <div className="border border-slate-200 rounded-xl p-4 space-y-3">
+        <p className="text-sm font-medium text-slate-700 flex items-center gap-2">
+          <CreditCard size={15} className="text-slate-400" /> Tipo de pago
+        </p>
+        <div className="flex gap-6">
+          {['contado', 'cuotas'].map((tp) => (
+            <label key={tp} className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="tipoPago" value={tp}
+                checked={form.tipoPago === tp}
+                onChange={() => setForm((f) => ({ ...f, tipoPago: tp }))}
+                className="w-4 h-4 text-emerald-600 border-slate-300" />
+              <span className="text-sm text-slate-700">
+                {tp === 'contado' ? 'Contado' : 'En cuotas'}
+              </span>
+            </label>
+          ))}
+        </div>
+        {form.tipoPago === 'cuotas' && (
+          <div className="flex flex-wrap items-center gap-4 pt-1">
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-slate-600 whitespace-nowrap">Número de cuotas:</label>
+              <select value={form.nCuotas}
+                onChange={(e) => setForm((f) => ({ ...f, nCuotas: parseInt(e.target.value, 10) }))}
+                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                {CUOTAS_OPTS.map((n) => (
+                  <option key={n} value={n}>{n} cuotas</option>
+                ))}
+              </select>
+            </div>
+            {totalNumerico > 0 && (
+              <div className="text-sm">
+                <span className="text-slate-500">≈ </span>
+                <span className="font-semibold text-emerald-700">
+                  {formatMoney(montoPorCuota, monedaPrimaria ?? 'USD')}
+                </span>
+                <span className="text-slate-500"> / cuota</span>
+                {!monedaPrimaria && (
+                  <span className="text-xs text-amber-600 ml-2">(monedas mixtas)</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Total */}
       <div className="flex items-center justify-between pt-3 border-t border-slate-200">
         <span className="text-sm text-slate-500 font-medium">Total de la venta</span>
-        <span className="text-2xl font-bold text-slate-900">{formatMoney(total, moneda)}</span>
+        {monedaKeys.length <= 1 ? (
+          <span className="text-2xl font-bold text-slate-900">
+            {formatMoney(totalNumerico, monedaKeys[0] ?? 'USD')}
+          </span>
+        ) : (
+          <div className="text-right">
+            {monedaKeys.map((m) => (
+              <p key={m} className="text-xl font-bold text-slate-900">
+                {formatMoney(totalPorMoneda[m], m)}
+              </p>
+            ))}
+            <p className="text-xs text-slate-400">Venta en monedas mixtas</p>
+          </div>
+        )}
       </div>
 
       {/* Acciones */}
@@ -238,8 +334,14 @@ function VentaForm({ onGuardar, onCancelar, clientes, productos, moneda }) {
 }
 
 // ── Detalle de venta (modal) ──────────────────────────────────────────────────
-function VentaDetalle({ venta, moneda, onClose, onEliminar }) {
+function VentaDetalle({ venta, moneda, onClose, onEliminar, plan, onMarcarPago, empresa, canDelete, canExportPDF }) {
   const cfg = ESTADO_CFG[venta.estado] ?? ESTADO_CFG.completada;
+  const numero = `${new Date(venta.fecha + 'T00:00:00').getFullYear()}-${venta.id.slice(-6).toUpperCase()}`;
+
+  const handlePDF = () => {
+    generarPresupuestoPDF({ empresa, venta, numero });
+  };
+
   return (
     <div className="space-y-4">
       {/* Header info */}
@@ -256,6 +358,14 @@ function VentaDetalle({ venta, moneda, onClose, onEliminar }) {
           {cfg.label}
         </span>
       </div>
+
+      {/* Tipo de pago badge */}
+      {venta.tipoPago === 'cuotas' && (
+        <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100">
+          <CreditCard size={12} />
+          <span>Venta en <strong>{venta.nCuotas} cuotas</strong></span>
+        </div>
+      )}
 
       {/* Items */}
       <div>
@@ -275,8 +385,12 @@ function VentaDetalle({ venta, moneda, onClose, onEliminar }) {
                 <tr key={i}>
                   <td className="px-3 py-2 text-slate-800">{it.productoNombre}</td>
                   <td className="px-3 py-2 text-center text-slate-600">{it.cantidad}</td>
-                  <td className="px-3 py-2 text-right text-slate-600">{formatMoney(it.precioUnitario, moneda)}</td>
-                  <td className="px-3 py-2 text-right font-semibold text-slate-800">{formatMoney(it.subtotal, moneda)}</td>
+                  <td className="px-3 py-2 text-right text-slate-600">
+                    {formatMoney(it.precioUnitario, it.moneda ?? moneda)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold text-slate-800">
+                    {formatMoney(it.subtotal, it.moneda ?? moneda)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -294,15 +408,78 @@ function VentaDetalle({ venta, moneda, onClose, onEliminar }) {
       {/* Total */}
       <div className="flex items-center justify-between pt-2 border-t border-slate-200">
         <span className="font-medium text-slate-600">Total</span>
-        <span className="text-xl font-bold text-slate-900">{formatMoney(venta.total, moneda)}</span>
+        <span className="text-xl font-bold text-slate-900">
+          {getVentaTotalDisplay(venta, moneda)}
+        </span>
       </div>
+
+      {/* Plan de cuotas */}
+      {plan && (
+        <div>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <CreditCard size={12} /> Plan de cuotas ({plan.totalCuotas} cuotas)
+          </p>
+          <div className="border border-slate-200 rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs text-slate-500 font-semibold">Cuota</th>
+                  <th className="px-3 py-2 text-left text-xs text-slate-500 font-semibold">Vencimiento</th>
+                  <th className="px-3 py-2 text-right text-xs text-slate-500 font-semibold">Monto</th>
+                  <th className="px-3 py-2 text-center text-xs text-slate-500 font-semibold">Estado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {plan.pagos.map((p) => {
+                  const hoy = new Date().toISOString().split('T')[0];
+                  const vencida = !p.pagado && p.fechaVencimiento < hoy;
+                  return (
+                    <tr key={p.numeroCuota} className={vencida ? 'bg-red-50' : p.pagado ? 'bg-emerald-50/40' : ''}>
+                      <td className="px-3 py-2 text-slate-700 font-medium">#{p.numeroCuota}</td>
+                      <td className="px-3 py-2 text-slate-600 text-xs">{formatFecha(p.fechaVencimiento)}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-slate-800">
+                        {formatMoney(p.monto, plan.moneda)}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          onClick={() => onMarcarPago(p.numeroCuota)}
+                          title={p.pagado ? 'Marcar como no pagado' : 'Marcar como pagado'}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
+                            p.pagado
+                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                              : vencida
+                                ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {p.pagado ? '✓ Pagado' : vencida ? '⚠ Vencida' : 'Pendiente'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Actions */}
       <div className="flex justify-between gap-2 pt-1">
-        <button onClick={onEliminar}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors">
-          <Trash2 size={14} /> Eliminar
-        </button>
+        <div className="flex gap-2">
+          {canDelete && (
+            <button onClick={onEliminar}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors">
+              <Trash2 size={14} /> Eliminar
+            </button>
+          )}
+          {canExportPDF && (
+            <button onClick={handlePDF}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">
+              <FileText size={14} /> Presupuesto PDF
+            </button>
+          )}
+        </div>
         <button onClick={onClose}
           className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50">
           Cerrar
@@ -313,7 +490,7 @@ function VentaDetalle({ venta, moneda, onClose, onEliminar }) {
 }
 
 // ── Fila de tabla ────────────────────────────────────────────────────────────
-function VentaRow({ venta, moneda, onVer }) {
+function VentaRow({ venta, moneda, onVer, cuotaVencida }) {
   const cfg = ESTADO_CFG[venta.estado] ?? ESTADO_CFG.completada;
   const resumen = venta.items.length === 1
     ? venta.items[0].productoNombre
@@ -336,12 +513,24 @@ function VentaRow({ venta, moneda, onVer }) {
         )}
       </td>
       <td className="px-4 py-3.5 text-right">
-        <span className="text-sm font-bold text-slate-900">{formatMoney(venta.total, moneda)}</span>
+        <span className="text-sm font-bold text-slate-900">
+          {getVentaTotalDisplay(venta, moneda)}
+        </span>
+        {venta.tipoPago === 'cuotas' && (
+          <p className="text-[10px] text-blue-500 font-medium">{venta.nCuotas} cuotas</p>
+        )}
       </td>
       <td className="px-4 py-3.5 text-center">
-        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${cfg.cls}`}>
-          {cfg.label}
-        </span>
+        <div className="flex flex-col items-center gap-1">
+          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-medium ${cfg.cls}`}>
+            {cfg.label}
+          </span>
+          {cuotaVencida && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">
+              <AlertTriangle size={9} /> Cuota vencida
+            </span>
+          )}
+        </div>
       </td>
       <td className="px-4 py-3.5 text-center">
         <span className="opacity-0 group-hover:opacity-100 inline-flex items-center gap-1 text-xs text-emerald-600 font-medium transition-opacity">
@@ -361,9 +550,9 @@ function StatCard({ icon: Icon, label, value, color }) {
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 flex items-center gap-4">
       <div className={`rounded-xl p-3 ${STAT_COLORS[color]}`}><Icon size={20} /></div>
-      <div>
+      <div className="min-w-0">
         <p className="text-xs text-slate-500 font-medium">{label}</p>
-        <p className="text-2xl font-bold text-slate-900 leading-tight">{value}</p>
+        <p className="text-xl font-bold text-slate-900 leading-tight break-words">{value}</p>
       </div>
     </div>
   );
@@ -382,11 +571,13 @@ const FILTROS = [
   { value: 'este-anio', label: 'Este año' },
 ];
 
-export default function Ventas() {
-  const { ventas, agregarVenta, eliminarVenta } = useVentas();
-  const { productos, editarProducto }           = useInventario();
-  const { clientes }                            = useClientes();
-  const { empresa }                             = useConfig();
+export default function Ventas({ currentUser }) {
+  const { ventas, agregarVenta, eliminarVenta }                            = useVentas();
+  const { productos, editarProducto }                                      = useInventario();
+  const { clientes }                                                       = useClientes();
+  const { empresa }                                                        = useConfig();
+  const { planes, crearPlan, marcarPago, getPlan, tieneCuotaVencida }     = usePagosVenta();
+  const perms  = usePermissions(currentUser);
   const moneda = empresa.moneda ?? 'USD';
 
   const [search, setSearch]         = useState('');
@@ -415,19 +606,46 @@ export default function Ventas() {
     return { ingresosTotal, ingresosMes, ventasMes: ventasMes.length, ticket };
   }, [ventas]);
 
-  const handleRegistrar = (datos) => {
-    agregarVenta(datos);
-    datos.items.forEach((item) => {
-      if (!item.productoId) return;
+  const handleRegistrar = async (datos) => {
+    const nueva = await agregarVenta(datos);
+    for (const item of datos.items) {
+      if (!item.productoId) continue;
       const prod = productos.find((p) => p.id === item.productoId);
-      if (prod) editarProducto(item.productoId, { stock: Math.max(0, prod.stock - item.cantidad) });
-    });
+      if (prod) await editarProducto(item.productoId, { stock: Math.max(0, prod.stock - item.cantidad) });
+    }
+    if (nueva && datos.tipoPago === 'cuotas' && datos.nCuotas > 0) {
+      await crearPlan(nueva.id, {
+        total:      datos.total,
+        nCuotas:    datos.nCuotas,
+        moneda:     datos.monedaCuotas ?? moneda,
+        fechaInicio: datos.fecha,
+      });
+      appendLog('Venta en cuotas registrada', 'ventas', `${datos.clienteNombre} — ${datos.nCuotas} cuotas`);
+    } else {
+      appendLog('Venta registrada', 'ventas', `${datos.clienteNombre} — ${formatMoney(datos.total, moneda)}`);
+    }
     setShowNew(false);
   };
 
-  const handleEliminar = () => {
-    if (eliminando) { eliminarVenta(eliminando.id); setEliminando(null); setDetalle(null); }
+  const handleEliminar = async () => {
+    if (eliminando) {
+      appendLog('Venta eliminada', 'ventas', `${eliminando.clienteNombre}`);
+      await eliminarVenta(eliminando.id);
+      setEliminando(null);
+      setDetalle(null);
+    }
   };
+
+  const handleMarcarPago = (ventaId, numeroCuota) => {
+    marcarPago(ventaId, numeroCuota);
+    const plan = getPlan(ventaId);
+    const cuota = plan?.pagos?.find((p) => p.numeroCuota === numeroCuota);
+    const accion = cuota?.pagado ? 'Pago de cuota revertido' : 'Pago de cuota registrado';
+    appendLog(accion, 'ventas', `Venta ${ventaId.slice(-6)} — cuota ${numeroCuota}`);
+  };
+
+  // Unused planes suppressor — plane data is accessed via tieneCuotaVencida / getPlan
+  void planes;
 
   return (
     <div className="space-y-5">
@@ -454,10 +672,12 @@ export default function Ventas() {
               {FILTROS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
             </select>
           </div>
-          <button onClick={() => setShowNew(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors">
-            <Plus size={15} /> Nueva venta
-          </button>
+          {perms.canSell && (
+            <button onClick={() => setShowNew(true)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors">
+              <Plus size={15} /> Nueva venta
+            </button>
+          )}
         </div>
 
         <div className="overflow-x-auto">
@@ -478,7 +698,13 @@ export default function Ventas() {
                 </td></tr>
               ) : (
                 filtradas.map((v) => (
-                  <VentaRow key={v.id} venta={v} moneda={moneda} onVer={() => setDetalle(v)} />
+                  <VentaRow
+                    key={v.id}
+                    venta={v}
+                    moneda={moneda}
+                    onVer={() => setDetalle(v)}
+                    cuotaVencida={tieneCuotaVencida(v.id)}
+                  />
                 ))
               )}
             </tbody>
@@ -492,10 +718,10 @@ export default function Ventas() {
       </div>
 
       {/* Modal: Nueva venta */}
-      {showNew && (
+      {showNew && perms.canSell && (
         <Modal title="Registrar nueva venta" onClose={() => setShowNew(false)} size="lg">
           <VentaForm
-            clientes={clientes} productos={productos} moneda={moneda}
+            clientes={clientes} productos={productos}
             onGuardar={handleRegistrar} onCancelar={() => setShowNew(false)}
           />
         </Modal>
@@ -509,6 +735,11 @@ export default function Ventas() {
             moneda={moneda}
             onClose={() => setDetalle(null)}
             onEliminar={() => setEliminando(detalle)}
+            plan={getPlan(detalle.id)}
+            onMarcarPago={(numeroCuota) => handleMarcarPago(detalle.id, numeroCuota)}
+            empresa={empresa}
+            canDelete={perms.canDelete}
+            canExportPDF={perms.canExportPDF}
           />
         </Modal>
       )}

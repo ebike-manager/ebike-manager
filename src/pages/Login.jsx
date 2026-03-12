@@ -1,24 +1,27 @@
 import { useState } from 'react';
-import { Zap, Eye, EyeOff } from 'lucide-react';
+import { Zap, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import { useConfig } from '../hooks/useConfig';
 
-export default function Login({ onLogin }) {
-  const { empresa, usuarios } = useConfig();
+export default function Login() {
+  const { signIn } = useAuth();
+  const { empresa } = useConfig();
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [error, setError]       = useState('');
+  const [loading, setLoading]   = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    const user = usuarios.find(
-      (u) => u.email === email && u.password === password && u.activo
-    );
-    if (user) {
-      onLogin(user);
-    } else {
-      setError('Email o contraseña incorrectos, o el usuario está inactivo.');
+    setLoading(true);
+    try {
+      await signIn(email, password);
+    } catch (err) {
+      setError(err.message || 'Email o contraseña incorrectos.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -60,6 +63,7 @@ export default function Login({ onLogin }) {
                 placeholder="correo@ejemplo.com"
                 autoFocus
                 required
+                disabled={loading}
               />
             </div>
 
@@ -75,6 +79,7 @@ export default function Login({ onLogin }) {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 pr-10"
                   placeholder="••••••••"
                   required
+                  disabled={loading}
                 />
                 <button
                   type="button"
@@ -88,16 +93,18 @@ export default function Login({ onLogin }) {
 
             <button
               type="submit"
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-lg text-sm transition-colors"
+              disabled={loading}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-semibold py-2.5 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
             >
-              Ingresar
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              {loading ? 'Ingresando…' : 'Ingresar'}
             </button>
 
           </form>
         </div>
 
         <p className="text-slate-500 text-xs text-center mt-4">
-          v0.1.0 · {empresa.nombre}
+          v0.2.0 · {empresa.nombre}
         </p>
       </div>
     </div>

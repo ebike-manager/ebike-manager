@@ -1,129 +1,111 @@
-import { useState, useEffect } from 'react';
-
-const STORAGE_KEY = 'ebike_ventas';
-
-const ventasDemo = [
-  {
-    id: 'v1',
-    fecha: '2025-01-20',
-    clienteId: '1',
-    clienteNombre: 'Martín González',
-    items: [
-      { productoId: '1', productoNombre: 'E-Bike Mountain Pro 29"', cantidad: 1, precioUnitario: 1299.99, subtotal: 1299.99 },
-    ],
-    total: 1299.99,
-    estado: 'completada',
-    notas: '',
-  },
-  {
-    id: 'v2',
-    fecha: '2025-01-10',
-    clienteId: '3',
-    clienteNombre: 'Carlos Méndez',
-    items: [
-      { productoId: '2', productoNombre: 'Motor Bafang BBS02 750W', cantidad: 1, precioUnitario: 489.99, subtotal: 489.99 },
-      { productoId: '3', productoNombre: 'Batería Litio 48V 15Ah', cantidad: 1, precioUnitario: 349.99, subtotal: 349.99 },
-    ],
-    total: 839.98,
-    estado: 'completada',
-    notas: 'Combo motor + batería',
-  },
-  {
-    id: 'v3',
-    fecha: '2025-02-05',
-    clienteId: '2',
-    clienteNombre: 'Laura Rodríguez',
-    items: [
-      { productoId: '1', productoNombre: 'E-Bike Mountain Pro 29"', cantidad: 1, precioUnitario: 999.99, subtotal: 999.99 },
-    ],
-    total: 999.99,
-    estado: 'completada',
-    notas: '',
-  },
-  {
-    id: 'v4',
-    fecha: '2025-02-15',
-    clienteId: '1',
-    clienteNombre: 'Martín González',
-    items: [
-      { productoId: '5', productoNombre: 'Kit Luces LED Recargables', cantidad: 1, precioUnitario: 34.99, subtotal: 34.99 },
-      { productoId: '4', productoNombre: 'Casco Urbano Talla M Negro', cantidad: 1, precioUnitario: 59.99, subtotal: 59.99 },
-    ],
-    total: 94.98,
-    estado: 'completada',
-    notas: '',
-  },
-  {
-    id: 'v5',
-    fecha: '2025-03-01',
-    clienteId: '3',
-    clienteNombre: 'Carlos Méndez',
-    items: [
-      { productoId: '6', productoNombre: 'Controlador Sinusoidal 48V 25A', cantidad: 1, precioUnitario: 79.99, subtotal: 79.99 },
-    ],
-    total: 79.99,
-    estado: 'completada',
-    notas: 'Reemplazo',
-  },
-  {
-    id: 'v6',
-    fecha: '2026-03-01',
-    clienteId: '4',
-    clienteNombre: 'Sofía Peralta',
-    items: [
-      { productoId: '1', productoNombre: 'E-Bike Mountain Pro 29"', cantidad: 1, precioUnitario: 1299.99, subtotal: 1299.99 },
-    ],
-    total: 1299.99,
-    estado: 'completada',
-    notas: '',
-  },
-  {
-    id: 'v7',
-    fecha: '2026-03-05',
-    clienteId: '3',
-    clienteNombre: 'Carlos Méndez',
-    items: [
-      { productoId: '4', productoNombre: 'Casco Urbano Talla M Negro', cantidad: 2, precioUnitario: 59.99, subtotal: 119.98 },
-      { productoId: '5', productoNombre: 'Kit Luces LED Recargables', cantidad: 2, precioUnitario: 34.99, subtotal: 69.98 },
-    ],
-    total: 189.96,
-    estado: 'completada',
-    notas: 'Para dos bicicletas',
-  },
-];
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
 
 export function useVentas() {
-  const [ventas, setVentas] = useState(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) return JSON.parse(stored);
-    } catch {
-      // ignore
+  const [ventas, setVentas]   = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchVentas = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('ventas')
+      .select('*, venta_items(*)')
+      .order('created_at', { ascending: false });
+    if (!error && data) {
+      setVentas(data.map(mapVenta));
     }
-    return ventasDemo;
-  });
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ventas));
-  }, [ventas]);
+    fetchVentas();
 
-  const agregarVenta = (datos) => {
-    const nueva = {
-      ...datos,
-      id: Date.now().toString(),
-      fecha: datos.fecha || new Date().toISOString().split('T')[0],
+    const channel = supabase
+      .channel('ventas-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ventas' }, () => {
+        fetchVentas();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'venta_items' }, () => {
+        fetchVentas();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchVentas]);
+
+  const agregarVenta = async (datos) => {
+    // Insert venta
+    const ventaRow = {
+      fecha:          datos.fecha || new Date().toISOString().split('T')[0],
+      cliente_id:     datos.clienteId || null,
+      cliente_nombre: datos.clienteNombre || null,
+      total:          datos.total ?? 0,
+      estado:         datos.estado || 'completada',
+      notas:          datos.notas || null,
     };
-    setVentas((prev) => [nueva, ...prev]);
-    return nueva;
+    const { data: ventaData, error: ventaErr } = await supabase
+      .from('ventas').insert(ventaRow).select().single();
+    if (ventaErr) { console.error('Error creando venta:', ventaErr); return null; }
+
+    // Insert items
+    if (datos.items && datos.items.length > 0) {
+      const itemRows = datos.items.map((item) => ({
+        venta_id:        ventaData.id,
+        producto_id:     item.productoId || null,
+        producto_nombre: item.productoNombre,
+        cantidad:        item.cantidad,
+        precio_unitario: item.precioUnitario,
+        subtotal:        item.subtotal,
+        moneda:          item.moneda || 'USD',
+      }));
+      const { error: itemErr } = await supabase.from('venta_items').insert(itemRows);
+      if (itemErr) console.error('Error insertando items de venta:', itemErr);
+    }
+
+    // Refetch to get complete data
+    await fetchVentas();
+    return ventaData;
   };
 
-  const eliminarVenta = (id) => {
+  const eliminarVenta = async (id) => {
+    // Items se borran en cascada
+    const { error } = await supabase.from('ventas').delete().eq('id', id);
+    if (error) { console.error('Error eliminando venta:', error); return; }
     setVentas((prev) => prev.filter((v) => v.id !== id));
   };
 
-  const editarVenta = (id, datos) => {
+  const editarVenta = async (id, datos) => {
+    const row = {};
+    if (datos.fecha !== undefined)          row.fecha = datos.fecha;
+    if (datos.clienteId !== undefined)      row.cliente_id = datos.clienteId;
+    if (datos.clienteNombre !== undefined)  row.cliente_nombre = datos.clienteNombre;
+    if (datos.total !== undefined)          row.total = datos.total;
+    if (datos.estado !== undefined)         row.estado = datos.estado;
+    if (datos.notas !== undefined)          row.notas = datos.notas;
+
+    const { error } = await supabase.from('ventas').update(row).eq('id', id);
+    if (error) { console.error('Error editando venta:', error); return; }
     setVentas((prev) => prev.map((v) => (v.id === id ? { ...v, ...datos } : v)));
   };
 
-  return { ventas, agregarVenta, eliminarVenta, editarVenta };
+  return { ventas, loading, agregarVenta, eliminarVenta, editarVenta, refetch: fetchVentas };
+}
+
+function mapVenta(row) {
+  return {
+    id:            row.id,
+    fecha:         row.fecha,
+    clienteId:     row.cliente_id,
+    clienteNombre: row.cliente_nombre,
+    items:         (row.venta_items || []).map((item) => ({
+      productoId:     item.producto_id,
+      productoNombre: item.producto_nombre,
+      cantidad:       item.cantidad,
+      precioUnitario: Number(item.precio_unitario),
+      subtotal:       Number(item.subtotal),
+      moneda:         item.moneda,
+    })),
+    total:  Number(row.total),
+    estado: row.estado,
+    notas:  row.notas,
+  };
 }

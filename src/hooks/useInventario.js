@@ -1,110 +1,116 @@
-import { useState, useEffect } from 'react';
-
-const STORAGE_KEY = 'ebike_inventario';
-
-const productosDemo = [
-  {
-    id: '1',
-    nombre: 'E-Bike Mountain Pro 29"',
-    categoria: 'Bicicletas',
-    descripcion: 'Bicicleta eléctrica para montaña con motor 500W y batería 48V',
-    precio: 1299.99,
-    stock: 5,
-    umbralMinimo: 2,
-    estado: 'activo',
-    fechaCreacion: new Date('2025-01-15').toISOString(),
-  },
-  {
-    id: '2',
-    nombre: 'Motor Bafang BBS02 750W',
-    categoria: 'Motores',
-    descripcion: 'Motor central de alto rendimiento para conversiones e-bike',
-    precio: 489.99,
-    stock: 8,
-    umbralMinimo: 3,
-    estado: 'activo',
-    fechaCreacion: new Date('2025-01-20').toISOString(),
-  },
-  {
-    id: '3',
-    nombre: 'Batería Litio 48V 15Ah',
-    categoria: 'Baterías',
-    descripcion: 'Batería de alta capacidad, celdas Samsung 18650',
-    precio: 349.99,
-    stock: 2,
-    umbralMinimo: 3,
-    estado: 'activo',
-    fechaCreacion: new Date('2025-02-01').toISOString(),
-  },
-  {
-    id: '4',
-    nombre: 'Casco Urbano Talla M Negro',
-    categoria: 'Accesorios',
-    descripcion: 'Casco homologado CE para ciclismo urbano',
-    precio: 59.99,
-    stock: 15,
-    umbralMinimo: 5,
-    estado: 'activo',
-    fechaCreacion: new Date('2025-02-10').toISOString(),
-  },
-  {
-    id: '5',
-    nombre: 'Kit Luces LED Recargables',
-    categoria: 'Accesorios',
-    descripcion: 'Set delantera 800lm y trasera intermitente, carga USB-C',
-    precio: 34.99,
-    stock: 20,
-    umbralMinimo: 8,
-    estado: 'activo',
-    fechaCreacion: new Date('2025-02-15').toISOString(),
-  },
-  {
-    id: '6',
-    nombre: 'Controlador Sinusoidal 48V 25A',
-    categoria: 'Repuestos',
-    descripcion: 'Controlador para motores de rueda trasera, silencioso',
-    precio: 79.99,
-    stock: 1,
-    umbralMinimo: 2,
-    estado: 'activo',
-    fechaCreacion: new Date('2025-03-01').toISOString(),
-  },
-];
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
+import { appendLog } from './useActivityLog';
 
 export function useInventario() {
-  const [productos, setProductos] = useState(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) return JSON.parse(stored);
-    } catch {
-      // ignore parse errors
+  const [productos, setProductos] = useState([]);
+  const [loading, setLoading]     = useState(true);
+
+  const fetchProductos = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('productos')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!error && data) {
+      setProductos(data.map(mapProducto));
     }
-    return productosDemo;
-  });
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(productos));
-  }, [productos]);
+    fetchProductos();
 
-  const agregarProducto = (datos) => {
-    const nuevo = {
-      ...datos,
-      id: Date.now().toString(),
-      fechaCreacion: new Date().toISOString(),
+    const channel = supabase
+      .channel('productos-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'productos' }, () => {
+        fetchProductos();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchProductos]);
+
+  const agregarProducto = async (datos) => {
+    const row = {
+      nombre:            datos.nombre,
+      categoria:         datos.categoria || null,
+      descripcion:       datos.descripcion || null,
+      precio:            datos.precio,
+      moneda:            datos.moneda || 'USD',
+      stock:             datos.stock ?? 0,
+      umbral_minimo:     datos.umbralMinimo ?? 0,
+      estado:            datos.estado || 'activo',
+      historial_precios: datos.historialPrecios || [],
     };
+    const { data, error } = await supabase.from('productos').insert(row).select().single();
+    if (error) { console.error('Error agregando producto:', error); return null; }
+    appendLog(`Creó producto "${datos.nombre}"`, 'Inventario', `Precio: ${datos.precio} ${datos.moneda}`);
+    const nuevo = mapProducto(data);
     setProductos((prev) => [nuevo, ...prev]);
     return nuevo;
   };
 
-  const editarProducto = (id, datos) => {
+  const editarProducto = async (id, datos) => {
+    const oldProd = productos.find((p) => p.id === id);
+    const row = {};
+    if (datos.nombre !== undefined)       row.nombre = datos.nombre;
+    if (datos.categoria !== undefined)    row.categoria = datos.categoria;
+    if (datos.descripcion !== undefined)  row.descripcion = datos.descripcion;
+    if (datos.precio !== undefined)       row.precio = datos.precio;
+    if (datos.moneda !== undefined)       row.moneda = datos.moneda;
+    if (datos.stock !== undefined)        row.stock = datos.stock;
+    if (datos.umbralMinimo !== undefined) row.umbral_minimo = datos.umbralMinimo;
+    if (datos.estado !== undefined)       row.estado = datos.estado;
+
+    if (datos.precio !== undefined && oldProd && datos.precio !== oldProd.precio) {
+      const entrada = {
+        fecha: new Date().toISOString().split('T')[0],
+        precioAnterior: oldProd.precio,
+        precioNuevo: datos.precio,
+        moneda: datos.moneda ?? oldProd.moneda,
+        usuario: 'Sistema',
+      };
+      row.historial_precios = [...(oldProd.historialPrecios ?? []), entrada];
+      appendLog(`Cambió precio de "${oldProd.nombre}"`, 'Inventario', `${oldProd.precio} → ${datos.precio} ${entrada.moneda}`);
+    } else if (datos.nombre || datos.stock !== undefined) {
+      if (oldProd) appendLog(`Editó producto "${oldProd.nombre}"`, 'Inventario');
+    }
+
+    if (datos.historialPrecios !== undefined && !row.historial_precios) {
+      row.historial_precios = datos.historialPrecios;
+    }
+
+    const { error } = await supabase.from('productos').update(row).eq('id', id);
+    if (error) { console.error('Error editando producto:', error); return; }
+
     setProductos((prev) =>
       prev.map((p) => (p.id === id ? { ...p, ...datos } : p))
     );
   };
 
-  const eliminarProducto = (id) => {
+  const eliminarProducto = async (id) => {
+    const p = productos.find((x) => x.id === id);
+    if (p) appendLog(`Eliminó producto "${p.nombre}"`, 'Inventario');
+    const { error } = await supabase.from('productos').delete().eq('id', id);
+    if (error) { console.error('Error eliminando producto:', error); return; }
     setProductos((prev) => prev.filter((p) => p.id !== id));
   };
 
-  return { productos, agregarProducto, editarProducto, eliminarProducto };
+  return { productos, loading, agregarProducto, editarProducto, eliminarProducto, refetch: fetchProductos };
+}
+
+function mapProducto(row) {
+  return {
+    id:               row.id,
+    nombre:           row.nombre,
+    categoria:        row.categoria,
+    descripcion:      row.descripcion,
+    precio:           Number(row.precio),
+    moneda:           row.moneda,
+    stock:            row.stock,
+    umbralMinimo:     row.umbral_minimo,
+    estado:           row.estado,
+    historialPrecios: row.historial_precios || [],
+    fechaCreacion:    row.created_at,
+  };
 }
