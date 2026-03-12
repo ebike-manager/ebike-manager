@@ -12,4 +12,11 @@ if (!supabaseUrl || !supabaseAnon) {
 export const supabase = createClient(
   supabaseUrl  || 'https://placeholder.supabase.co',
   supabaseAnon || 'placeholder',
+  {
+    auth: {
+      // Bypass Web Locks API — evita el bug "Lock was not released within 5000ms"
+      // que deja la app colgada en el spinner de carga.
+      lock: async (_name, _acquireTimeout, fn) => fn(),
+    },
+  }
 );

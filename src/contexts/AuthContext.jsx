@@ -19,13 +19,24 @@ export function AuthProvider({ children }) {
   };
 
   useEffect(() => {
+    // Fallback: si getSession() tarda más de 4s (lock atascado), limpia el storage y desbloquea
+    const fallbackTimer = setTimeout(() => {
+      const projectRef = (import.meta.env.VITE_SUPABASE_URL || '').split('//')[1]?.split('.')[0];
+      if (projectRef) localStorage.removeItem(`sb-${projectRef}-auth-token`);
+      setLoading(false);
+    }, 4000);
+
     // Get initial session
     supabase.auth.getSession().then(async ({ data: { session: s } }) => {
+      clearTimeout(fallbackTimer);
       setSession(s);
       if (s?.user) {
         const p = await fetchProfile(s.user.id);
         setProfile(p);
       }
+      setLoading(false);
+    }).catch(() => {
+      clearTimeout(fallbackTimer);
       setLoading(false);
     });
 
